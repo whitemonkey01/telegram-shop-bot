@@ -34,7 +34,9 @@ async def lifespan(app: FastAPI):
     store = build_store()
     seed_demo_data(store)  # demo catalog; Phase 2: real DB rows instead
     pay = CryptoPayClient(CRYPTO_PAY_TOKEN or "missing", test_mode=CRYPTO_PAY_TEST)
-    bot = Bot(TELEGRAM_TOKEN or "123:demo")
+    from aiogram.client.default import DefaultBotProperties
+    bot = Bot(TELEGRAM_TOKEN or "123:demo",
+              default=DefaultBotProperties(parse_mode="HTML"))
     shop = ShopBot(bot=bot, store=store, pay=pay, admin_ids=ADMIN_IDS)
 
     state.update(store=store, pay=pay, bot=bot, shop=shop)
