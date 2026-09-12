@@ -61,3 +61,27 @@ def test_pending_orders_recovery(store):
     store.mark_paid(order.id)
     assert store.pending_orders() == []  # reconciler would now deliver
     assert store.deliver(order.id) is not None
+
+
+def test_user_profile_stats(store):
+    """Profile tracks membership, orders, purchases and spend."""
+    store.touch_user(777, "Alice", "alice")
+    profile = store.get_user(777)
+    assert profile is not None
+    assert profile.first_name == "Alice"
+    assert profile.total_orders == 0 and profile.total_spent == 0.0
+
+    p = store.all_products()[0]  # $2.50, stock 3
+    for i in range(2):
+        order = store.create_order(777, "alice", p.id, f"INV-{i}", p.price_usd)
+        store.mark_paid(order.id)
+        assert store.deliver(order.id) is not None
+
+    # one pending order that never got paid (shouldn't count as purchase)
+    store.create_order(777, "alice", p.id, "INV-x", p.price_usd)
+
+    profile = store.get_user(777)
+    assert profile.total_orders == 3
+    assert profile.total_purchases == 2
+    assert profile.total_spent == 5.00  # 2 x $2.50
+    assert profile.member_since <= profile.last_seen

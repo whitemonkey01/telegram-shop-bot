@@ -45,13 +45,47 @@ class Order:
     created_at: float = field(default_factory=time.time)
 
 
+@dataclass
+class UserProfile:
+    user_id: int
+    first_name: str = ""
+    username: Optional[str] = None
+    balance: float = 0.0           # store credit (top-ups come later)
+    total_orders: int = 0            # all orders created
+    total_purchases: int = 0        # delivered orders only
+    total_spent: float = 0.0        # sum of delivered order amounts
+    member_since: float = field(default_factory=time.time)
+    last_seen: float = field(default_factory=time.time)
+
+
 class Store:
     """In-memory implementation (demo). Interface mirrors the future Supabase one."""
 
     def __init__(self) -> None:
         self.products: dict[int, Product] = {}
         self.orders: dict[str, Order] = {}
+        self.users: dict[int, UserProfile] = {}
         self._next_product_id = 1
+
+    # ---- users ----
+    def touch_user(self, user_id: int, first_name: str = "",
+                   username: Optional[str] = None) -> UserProfile:
+        """Create profile on first contact; refresh name/username + last_seen."""
+        profile = self.users.get(user_id)
+        if profile is None:
+            profile = UserProfile(user_id=user_id, first_name=first_name,
+                                   username=username)
+            self.users[user_id] = profile
+        else:
+            if first_name:
+                profile.first_name = first_name
+            if username:
+                profile.username = username
+            profile.last_seen = time.time()
+        return profile
+
+    def get_user(self, user_id: int) -> Optional[UserProfile]:
+        return self.users.get(user_id)
 
     # ---- products ----
     def add_product(self, title: str, price_usd: float, items: list[str]) -> Product:
@@ -75,6 +109,8 @@ class Store:
                       product_id=product_id, invoice_id=invoice_id,
                       amount_usd=amount_usd)
         self.orders[order.id] = order
+        profile = self.touch_user(user_id, username=username or "")
+        profile.total_orders += 1
         return order
 
     def get_order_by_invoice(self, invoice_id: str) -> Optional[Order]:
@@ -113,6 +149,10 @@ class Store:
             return None
         order.status = "delivered"
         order.delivered_item = item
+        profile = self.users.get(order.user_id)
+        if profile:
+            profile.total_purchases += 1
+            profile.total_spent += order.amount_usd
         return item
 
 

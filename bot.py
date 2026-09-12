@@ -18,6 +18,7 @@ from aiogram.types import (
 
 from cryptopay import CryptoPayClient, CryptoPayError
 from store import Order, Product, Store
+import time as _time
 
 log = logging.getLogger("shopbot")
 
@@ -27,7 +28,8 @@ PAGE_SIZE = 8  # buttons per catalog page
 def main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🛍 Shop"), KeyboardButton(text="📦 My Orders")],
+            [KeyboardButton(text="🛍 Shop"), KeyboardButton(text="👤 Profile")],
+            [KeyboardButton(text="📦 My Orders")],
         ],
         resize_keyboard=True,  # fits phone screen
         input_field_placeholder="Browse or use the buttons below…",
@@ -46,8 +48,10 @@ class ShopBot:
         self.dp.message(CommandStart())(self.cmd_start)
         self.dp.message(Command("shop"))(self.cmd_shop)
         self.dp.message(Command("myorders"))(self.cmd_my_orders)
+        self.dp.message(Command("profile"))(self.cmd_profile)
         self.dp.message(F.text == "🛍 Shop")(self.cb_shop_button)
         self.dp.message(F.text == "📦 My Orders")(self.cb_my_orders_button)
+        self.dp.message(F.text == "👤 Profile")(self.cb_profile_button)
         self.dp.callback_query(F.data == "catalog:0")(self.cb_catalog_first)
         self.dp.callback_query(F.data.startswith("page:"))(self.cb_page)
         self.dp.callback_query(F.data.startswith("buy:"))(self.cb_buy)
@@ -109,6 +113,37 @@ class ShopBot:
 
     async def cb_my_orders_button(self, msg: Message) -> None:
         await self.cmd_my_orders(msg)
+
+    # ---------- profile ----------
+
+    def _render_profile(self, profile) -> str:
+        from datetime import datetime, timezone
+        member_since = datetime.fromtimestamp(profile.member_since, tz=timezone.utc)
+        handle = f"@{profile.username}" if profile.username else "—"
+        return (
+            f"👤 <b>{profile.first_name or 'Customer'}</b>\n"
+            f"🆔 ID: <code>{profile.user_id}</code>\n"
+            f"🔗 Username: {handle}\n\n"
+            f"💰 Balance: <b>${profile.balance:.2f}</b>\n\n"
+            f"🧾 Total orders: <b>{profile.total_orders}</b>\n"
+            f"📦 Purchases: <b>{profile.total_purchases}</b>\n"
+            f"💸 Total spent: <b>${profile.total_spent:.2f}</b>\n\n"
+            f"📅 Member since: <b>{member_since.strftime('%d %b %Y, %H:%M UTC')}</b>"
+        )
+
+    async def cmd_profile(self, msg: Message) -> None:
+        profile = self.store.get_user(msg.from_user.id)
+        if not profile:
+            await msg.answer("Profile not found — press /start first.")
+            return
+        await msg.answer(self._render_profile(profile),
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                             [InlineKeyboardButton(text="🛍 Continue shopping",
+                                                   callback_data="catalog:0")],
+                         ]))
+
+    async def cb_profile_button(self, msg: Message) -> None:
+        await self.cmd_profile(msg)
 
     async def cmd_shop(self, msg: Message) -> None:
         await msg.answer("🛍 Catalog:", reply_markup=self.catalog_kb(0))
@@ -215,6 +250,22 @@ class ShopBot:
                     pass
         return True
 
+    # ---------- middleware factory (user tracking) ----------
+
+    @staticmethod
+    def _make_tracker(store: "Store"):
+        from aiogram import BaseMiddleware
+        from aiogram.types import User as TgUser
+
+        class TrackUserMiddleware(BaseMiddleware):
+            async def __call__(self, handler, event, data):
+                user: TgUser | None = data.get("event_from_user")
+                if user and not user.is_bot:
+                    store.touch_user(user.id, user.first_name, user.username)
+                return await handler(event, data)
+
+        return TrackUserMiddleware()
+
     # ---------- startup reconciler (idempotency, see plan) ----------
 
     async def reconcile_pending(self) -> int:
@@ -234,5 +285,7 @@ class ShopBot:
         return delivered
 
     async def run_polling(self) -> None:
+        self.dp.message.middleware(self._make_tracker(self.store))
+        self.dp.callback_query.middleware(self._make_tracker(self.store))
         await self.reconcile_pending()
         await self.dp.start_polling(self.bot)
