@@ -11,7 +11,9 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
+    ReplyKeyboardMarkup,
 )
 
 from cryptopay import CryptoPayClient, CryptoPayError
@@ -20,6 +22,16 @@ from store import Order, Product, Store
 log = logging.getLogger("shopbot")
 
 PAGE_SIZE = 8  # buttons per catalog page
+
+# Persistent reply keyboard shown at the bottom of the chat
+def main_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🛍 Shop"), KeyboardButton(text="📦 My Orders")],
+        ],
+        resize_keyboard=True,  # fits phone screen
+        input_field_placeholder="Browse or use the buttons below…",
+    )
 
 
 class ShopBot:
@@ -34,6 +46,8 @@ class ShopBot:
         self.dp.message(CommandStart())(self.cmd_start)
         self.dp.message(Command("shop"))(self.cmd_shop)
         self.dp.message(Command("myorders"))(self.cmd_my_orders)
+        self.dp.message(F.text == "🛍 Shop")(self.cb_shop_button)
+        self.dp.message(F.text == "📦 My Orders")(self.cb_my_orders_button)
         self.dp.callback_query(F.data == "catalog:0")(self.cb_catalog_first)
         self.dp.callback_query(F.data.startswith("page:"))(self.cb_page)
         self.dp.callback_query(F.data.startswith("buy:"))(self.cb_buy)
@@ -79,13 +93,22 @@ class ShopBot:
 
     async def cmd_start(self, msg: Message) -> None:
         await msg.answer(
-            "🛒 Welcome to <b>Demo Shop</b>!\n"
+            "🛒 Welcome to <b>Matrix Shop</b>!\n"
             "Crypto payments via @CryptoBot.\n"
             "Digital goods delivered instantly after payment.\n\n"
             "/shop — browse catalog\n"
             "/myorders — your purchase history",
             reply_markup=self.catalog_kb(0),
         )
+        # then pin the bottom keyboard for this chat
+        await msg.answer("⌨️ Use the buttons below 👇",
+                         reply_markup=main_keyboard())
+
+    async def cb_shop_button(self, msg: Message) -> None:
+        await msg.answer("🛍 Catalog:", reply_markup=self.catalog_kb(0))
+
+    async def cb_my_orders_button(self, msg: Message) -> None:
+        await self.cmd_my_orders(msg)
 
     async def cmd_shop(self, msg: Message) -> None:
         await msg.answer("🛍 Catalog:", reply_markup=self.catalog_kb(0))
