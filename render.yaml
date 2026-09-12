@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: telegram-shop-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: CRYPTO_PAY_TOKEN
+        sync: false
+      - key: CRYPTO_PAY_TEST
+        value: "true"
+      - key: ADMIN_IDS
+        sync: false
+      # Phase 2 (uncomment when Supabase is wired in store.build_store):
+      # - key: SUPABASE_URL
+      #   sync: false
+      # - key: SUPABASE_SERVICE_KEY
+      #   sync: false
