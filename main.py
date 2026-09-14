@@ -23,6 +23,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN", "")
 CRYPTO_PAY_TEST = os.getenv("CRYPTO_PAY_TEST", "true").lower() in ("1", "true", "yes")
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()}
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 state: dict = {}
 
@@ -30,13 +31,23 @@ state: dict = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from aiogram import Bot
-
-    store = build_store()
-    seed_demo_data(store)  # demo catalog; Phase 2: real DB rows instead
-    pay = CryptoPayClient(CRYPTO_PAY_TOKEN or "missing", test_mode=CRYPTO_PAY_TEST)
     from aiogram.client.default import DefaultBotProperties
+
+    pay = CryptoPayClient(CRYPTO_PAY_TOKEN or "missing", test_mode=CRYPTO_PAY_TEST)
     bot = Bot(TELEGRAM_TOKEN or "123:demo",
               default=DefaultBotProperties(parse_mode="HTML"))
+
+    if DATABASE_URL:
+        from pgstore import PGStore
+        store = PGStore(DATABASE_URL)
+        await store.connect()
+        log.info("using Supabase Postgres store")
+    else:
+        from store import Store, seed_demo_data
+        store = Store()
+        seed_demo_data(store)
+        log.warning("DATABASE_URL not set — in-memory demo store (resets on restart)")
+
     shop = ShopBot(bot=bot, store=store, pay=pay, admin_ids=ADMIN_IDS)
 
     state.update(store=store, pay=pay, bot=bot, shop=shop)
@@ -53,6 +64,11 @@ async def lifespan(app: FastAPI):
 
     if polling:
         polling.cancel()
+    if hasattr(store, "aclose"):
+        try:
+            await store.aclose()
+        except Exception:
+            pass
     await pay.aclose()
     await bot.session.close()
 
@@ -81,14 +97,19 @@ async def crypto_pay_webhook(request: Request):
         invoice_id = str(payload.get("invoice_id", ""))
         store, shop = state["store"], state["shop"]
 
-        order = store.get_order_by_invoice(invoice_id)
+        from bot import s
+        order = await s(store.get_order_by_invoice, invoice_id)
         if not order:
             log.warning("webhook for unknown invoice %s", invoice_id)
             raise HTTPException(404, "unknown invoice")
+        if not isinstance(order, dict):
+            order = order.__dict__
 
-        if order.status == "pending":
-            store.mark_paid(order.id)
-            await shop.deliver_order(order)  # updates live stock too
+        if order["status"] == "pending":
+            paid = await s(store.mark_paid, str(order["id"]))
+            if paid is not None:
+                await shop.deliver_order(paid if isinstance(paid, dict)
+                                         else paid.__dict__)
             return {"ok": True}
         return {"ok": True, "note": "already processed"}
 

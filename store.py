@@ -103,6 +103,10 @@ class Store:
         return list(self.products.values())
 
     # ---- orders ----
+    def user_orders(self, user_id: int, limit: int = 10) -> list[Order]:
+        return [o for o in self.orders.values()
+                if o.user_id == user_id and o.status == "delivered"][-limit:]
+
     def create_order(self, user_id: int, username: Optional[str],
                      product_id: int, invoice_id: str, amount_usd: float) -> Order:
         order = Order(id=uuid.uuid4().hex, user_id=user_id, username=username,
