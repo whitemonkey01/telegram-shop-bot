@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from bot import parse_add_args, parse_restock_args
 from store import Store, seed_demo_data
 
 
@@ -85,3 +86,41 @@ def test_user_profile_stats(store):
     assert profile.total_purchases == 2
     assert profile.total_spent == 5.00  # 2 x $2.50
     assert profile.member_since <= profile.last_seen
+
+
+def test_restock_and_stats(store):
+    p = store.all_products()[0]  # Netflix, stock 3
+    store.restock(p.id, ["K1", "K2"])
+    assert store.get_product(p.id).stock == 5
+
+    store.restock(999, ["X"]) is None  # unknown product
+    assert store.restock(p.id, []) is None  # empty codes
+
+    st = store.stats()
+    assert st["users"] >= 0
+    assert st["pending"] == 0 and st["paid"] == 0 and st["delivered"] == 0
+    assert any(row["id"] == p.id and row["stock"] == 5 for row in st["products"])
+
+    order = store.create_order(4, "z", p.id, "INV-S", p.price_usd)
+    store.mark_paid(order.id)
+    store.deliver(order.id)
+    st = store.stats()
+    assert st["delivered"] == 1
+    assert st["revenue"] == 2.50
+
+
+def test_parse_add_args():
+    assert parse_add_args("/add Netflix 1 Month | 2.50") == ("Netflix 1 Month", 2.5)
+    assert parse_add_args("/add X|1") == ("X", 1.0)
+    assert parse_add_args("/add no pipe here") is None
+    assert parse_add_args("/add Title | abc") is None
+    assert parse_add_args("/add Title | -5") is None
+    assert parse_add_args("/add  | 2") is None
+    assert parse_add_args("/add") is None
+
+
+def test_parse_restock_args():
+    assert parse_restock_args("/restock 3") == 3
+    assert parse_restock_args("/restock abc") is None
+    assert parse_restock_args("/restock -1") is None
+    assert parse_restock_args("/restock") is None

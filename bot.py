@@ -29,6 +29,34 @@ log = logging.getLogger("shopbot")
 
 PAGE_SIZE = 8  # buttons per catalog page
 
+BUTTON_LABELS = {"🛍 Shop", "👤 Profile", "📦 My Orders"}
+
+
+def parse_add_args(text: str):
+    """Parse '/add Title | 2.50' -> (title, price) or None."""
+    body = text.partition(" ")[2].strip()
+    if "|" not in body:
+        return None
+    title, _, price_s = body.partition("|")
+    title = title.strip()
+    try:
+        price = float(price_s.strip())
+    except ValueError:
+        return None
+    if not title or price <= 0:
+        return None
+    return title, round(price, 2)
+
+
+def parse_restock_args(text: str):
+    """Parse '/restock 3' -> product_id or None."""
+    body = text.partition(" ")[2].strip()
+    try:
+        pid = int(body)
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
 
 async def s(store_method, *args):
     """Call a store method that may be sync (Store) or async (PGStore)."""
@@ -69,6 +97,7 @@ class ShopBot:
         self.store = store
         self.pay = pay
         self.admin_ids = admin_ids
+        self._pending_restock: dict[int, int] = {}  # admin_id -> product_id
         self.dp = Dispatcher()
 
         self.dp.message(CommandStart())(self.cmd_start)
@@ -78,10 +107,15 @@ class ShopBot:
         self.dp.message(F.text == "🛍 Shop")(self.cb_shop_button)
         self.dp.message(F.text == "📦 My Orders")(self.cb_my_orders_button)
         self.dp.message(F.text == "👤 Profile")(self.cb_profile_button)
+        self.dp.message(Command("add"))(self.cmd_add)
+        self.dp.message(Command("restock"))(self.cmd_restock)
+        self.dp.message(Command("stats"))(self.cmd_stats)
+        self.dp.message(Command("cancel"))(self.cmd_cancel_admin)
         self.dp.callback_query(F.data == "catalog:0")(self.cb_catalog_first)
         self.dp.callback_query(F.data.startswith("page:"))(self.cb_page)
         self.dp.callback_query(F.data.startswith("buy:"))(self.cb_buy)
         self.dp.callback_query(F.data == "cancel")(self.cb_cancel)
+        self.dp.message(F.text)(self.on_plain_text)  # admin pending codes, last
 
     # ---------- keyboards ----------
 
@@ -298,6 +332,104 @@ class ShopBot:
                 except Exception:
                     pass
         return True
+
+    # ---------- admin (gated by ADMIN_IDS) ----------
+
+    def _is_admin(self, msg: Message) -> bool:
+        return msg.from_user.id in self.admin_ids
+
+    async def cmd_add(self, msg: Message) -> None:
+        if not self._is_admin(msg):
+            return
+        parsed = parse_add_args(msg.text or "")
+        if not parsed:
+            await msg.answer(
+                "Usage: <code>/add Title | 2.50</code>\n"
+                "Example: <code>/add Netflix 1 Month | 2.50</code>\n\n"
+                "Product is created with 0 stock — then send the codes, "
+                "one per line.")
+            return
+        title, price = parsed
+        product = await s(self.store.add_product, title, price, [])
+        if product and not isinstance(product, dict):
+            product = product.__dict__
+        self._pending_restock[msg.from_user.id] = int(product["id"])
+        await msg.answer(
+            f"✅ Product <b>{title}</b> created — "
+            f"$<b>{price:.2f}</b>, id <code>{product['id']}</code>.\n\n"
+            "Now send the deliverable codes, one per line.\n"
+            "/cancel to abort.")
+
+    async def cmd_restock(self, msg: Message) -> None:
+        if not self._is_admin(msg):
+            return
+        pid = parse_restock_args(msg.text or "")
+        if not pid:
+            await msg.answer(
+                "Usage: <code>/restock 3</code>\n"
+                "Find the id in /stats or the catalog.")
+            return
+        product = await s(self.store.get_product, pid)
+        if not product:
+            await msg.answer(f"No product with id <code>{pid}</code>.")
+            return
+        if product and not isinstance(product, dict):
+            product = product.__dict__
+        self._pending_restock[msg.from_user.id] = pid
+        await msg.answer(
+            f"📦 Restocking <b>{product['title']}</b> "
+            f"(stock: {product['stock']}).\n\n"
+            "Send the new codes, one per line.\n"
+            "/cancel to abort.")
+
+    async def cmd_cancel_admin(self, msg: Message) -> None:
+        if not self._is_admin(msg):
+            return
+        if self._pending_restock.pop(msg.from_user.id, None) is None:
+            await msg.answer("Nothing pending.")
+        else:
+            await msg.answer("Cancelled — no codes were added.")
+
+    async def cmd_stats(self, msg: Message) -> None:
+        if not self._is_admin(msg):
+            return
+        st = await s(self.store.stats)
+        lines = [
+            "📊 <b>Shop stats</b>\n",
+            f"💸 Revenue: <b>${st['revenue']:.2f}</b>",
+            f"🧾 Pending: <b>{st['pending']}</b> · "
+            f"Paid: <b>{st['paid']}</b> · "
+            f"Delivered: <b>{st['delivered']}</b>",
+            f"👥 Users: <b>{st['users']}</b>\n",
+            "<b>Stock:</b>",
+        ]
+        for p in st["products"]:
+            lines.append(f"  #{p['id']} {p['title']} — <b>{p['stock']}</b> left")
+        await msg.answer("\n".join(lines))
+
+    async def on_plain_text(self, msg: Message) -> None:
+        uid = msg.from_user.id
+        if uid not in self.admin_ids or uid not in self._pending_restock:
+            return
+        text = (msg.text or "").strip()
+        if not text or text.startswith("/") or text in BUTTON_LABELS:
+            return
+        pid = self._pending_restock[uid]
+        codes = [line.strip() for line in text.splitlines() if line.strip()]
+        if not codes:
+            await msg.answer("Send at least one code, or /cancel.")
+            return
+        product = await s(self.store.restock, pid, codes)
+        self._pending_restock.pop(uid, None)
+        if not product:
+            await msg.answer(f"Product <code>{pid}</code> no longer exists.")
+            return
+        if product and not isinstance(product, dict):
+            product = product.__dict__
+        await msg.answer(
+            f"✅ Added <b>{len(codes)}</b> codes to "
+            f"<b>{product['title']}</b>.\n"
+            f"Stock now: <b>{product['stock']}</b>.")
 
     # ---------- middleware factory (user tracking) ----------
 

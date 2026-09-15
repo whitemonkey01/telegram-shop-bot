@@ -83,6 +83,45 @@ class PGStore:
                     [(row["id"], code) for code in items])
                 return dict(row)
 
+    async def restock(self, product_id: int, items: list[str]) -> Optional[dict]:
+        if not items:
+            return None
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                exists = await conn.fetchval(
+                    "select 1 from products where id = $1", product_id)
+                if not exists:
+                    return None
+                await conn.executemany(
+                    "insert into product_items (product_id, code) values ($1, $2)",
+                    [(product_id, code) for code in items])
+                row = await conn.fetchrow(
+                    "update products set stock = stock + $2 where id = $1 "
+                    "returning id, title, price_usd, stock",
+                    product_id, len(items))
+                return dict(row)
+
+    async def stats(self) -> dict:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "select coalesce(sum(amount_usd) filter "
+                "(where status = 'delivered'), 0)::float8 as revenue, "
+                "count(*) filter (where status = 'pending') as pending, "
+                "count(*) filter (where status = 'paid') as paid, "
+                "count(*) filter (where status = 'delivered') as delivered "
+                "from orders")
+            users = await conn.fetchval("select count(*) from shop_users")
+            products = await conn.fetch(
+                "select id, title, stock from products order by id")
+        return {
+            "revenue": round(row["revenue"], 2),
+            "pending": row["pending"],
+            "paid": row["paid"],
+            "delivered": row["delivered"],
+            "users": users,
+            "products": [dict(p) for p in products],
+        }
+
     # ---- users ----
     async def touch_user(self, user_id: int, first_name: str = "",
                          username: Optional[str] = None) -> dict:

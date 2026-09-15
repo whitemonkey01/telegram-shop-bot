@@ -102,6 +102,28 @@ class Store:
     def all_products(self) -> list[Product]:
         return list(self.products.values())
 
+    def restock(self, product_id: int, items: list[str]) -> Optional[Product]:
+        product = self.products.get(product_id)
+        if not product or not items:
+            return None
+        product.items.extend(items)
+        product.stock += len(items)
+        return product
+
+    def stats(self) -> dict:
+        delivered = [o for o in self.orders.values() if o.status == "delivered"]
+        pending = [o for o in self.orders.values() if o.status == "pending"]
+        paid = [o for o in self.orders.values() if o.status == "paid"]
+        return {
+            "revenue": round(sum(o.amount_usd for o in delivered), 2),
+            "pending": len(pending),
+            "paid": len(paid),
+            "delivered": len(delivered),
+            "users": len(self.users),
+            "products": [{"id": p.id, "title": p.title, "stock": p.stock}
+                         for p in self.products.values()],
+        }
+
     # ---- orders ----
     def user_orders(self, user_id: int, limit: int = 10) -> list[Order]:
         return [o for o in self.orders.values()
