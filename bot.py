@@ -168,7 +168,7 @@ class ShopBot:
     async def cmd_start(self, msg: Message) -> None:
         await msg.answer(
             "🛒 Welcome to <b>Matrix Shop</b>!\n"
-            "Crypto payments via @CryptoBot.\n"
+            "Pay securely — instant delivery after payment.\n"
             "Digital goods delivered instantly after payment.\n\n"
             "/shop — browse catalog\n"
             "/profile — your stats & balance\n"
@@ -261,7 +261,7 @@ class ShopBot:
                 f"<b>{product['title']}</b>\n"
                 f"Price: ${float(product['price_usd']):.2f}\n"
                 f"In stock: {product['stock']}\n\n"
-                "Continue to crypto payment?",
+                "Continue to payment?",
                 reply_markup=self.order_kb(product),
             )
             await cb.answer()
@@ -288,7 +288,7 @@ class ShopBot:
         await cb.message.edit_text(
             f"🧾 Order <code>{str(order['id'])[:8]}</code>\n"
             f"{product['title']} — ${float(product['price_usd']):.2f}\n\n"
-            "Pay via CryptoBot (USDT/BTC/TON). Button opens the invoice.",
+            "Tap the button below to open the invoice and pay.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="💰 Open invoice", url=invoice.pay_url)],
                 [InlineKeyboardButton(text="✖️ Cancel", callback_data="cancel")],
